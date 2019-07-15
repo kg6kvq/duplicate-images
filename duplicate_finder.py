@@ -207,6 +207,16 @@ def show(db):
     print("Total: {}".format(total))
 
 
+def cleanup(db):
+    count = 0
+    files = db.find()
+    for id in files:
+        file_name = id['_id']
+        if not os.path.exists(file_name):
+            remove_image(file_name, db)
+            count += 1
+    cprint("Cleanup removed {} files".format(count), 'yellow')
+
 def same_time(dup):
     items = dup['items']
     if "Time unknown" in items:
@@ -398,6 +408,8 @@ if __name__ == '__main__':
             remove(args['<path>'], db)
         elif args['clear']:
             clear(db)
+        elif args['cleanup']:
+            cleanup(db)            
         elif args['show']:
             show(db)
         elif args['find']:
