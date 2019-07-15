@@ -7,7 +7,12 @@ Usage:
     duplicate_finder.py remove <path> ... [--db=<db_path>]
     duplicate_finder.py clear [--db=<db_path>]
     duplicate_finder.py show [--db=<db_path>]
+<<<<<<< HEAD
     duplicate_finder.py find [--print] [--delete] [--match-time] [--trash=<trash_path>] [--db=<db_path>] [--threshold=<num>] 
+=======
+    duplicate_finder.py cleanup [--db=<db_path>]
+    duplicate_finder.py find [--print] [--delete] [--match-time] [--trash=<trash_path>] [--db=<db_path>]
+>>>>>>> 50f58c3d468b99a0c766a653c465b406f69477b8
     duplicate_finder.py -h | --help
 
 Options:
@@ -207,6 +212,16 @@ def show(db):
     print("Total: {}".format(total))
 
 
+def cleanup(db):
+    count = 0
+    files = db.find()
+    for id in files:
+        file_name = id['_id']
+        if not os.path.exists(file_name):
+            remove_image(file_name, db)
+            count += 1
+    cprint("Cleanup removed {} files".format(count), 'yellow')
+
 def same_time(dup):
     items = dup['items']
     if "Time unknown" in items:
@@ -398,6 +413,8 @@ if __name__ == '__main__':
             remove(args['<path>'], db)
         elif args['clear']:
             clear(db)
+        elif args['cleanup']:
+            cleanup(db)
         elif args['show']:
             show(db)
         elif args['find']:
