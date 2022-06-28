@@ -2,6 +2,17 @@
 
 This is a branch of the Duplicate Image Finder orignally created at philipbl/duplicate-images.
 
+inc: PR41 (Windows Compatablity)
+inc: PR44 (modules update)
+inc: PR45 (define db and collection names)
+inc: PR55 (add 'cleanup' command to remove non-existing files)
+inc: PR56 (Add fuzzy mathing with pybktree and HEIF/HEIC support)
+inc: PR71 (Info message when there are no duplicates)
+
+Fix mongo count depreciatoin
+Mongodb allowDiskUse to True
+
+For Windows use 'pip install python-magic-bin'
 ----------------------------------------------------------
 Original Readme
 ----------------------------------------------------------

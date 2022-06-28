@@ -7,7 +7,8 @@ Usage:
     duplicate_finder.py remove <path> ... [--db=<db_path>] [--db-name=<db-name>] [--db-collection=<collection-name>]
     duplicate_finder.py clear [--db=<db_path>] [--db-name=<db-name>] [--db-collection=<collection-name>]
     duplicate_finder.py show [--db=<db_path>] [--db-name=<db-name>] [--db-collection=<collection-name>]
-    duplicate_finder.py find [--print] [--delete] [--match-time] [--trash=<trash_path>] [--db=<db_path>] [--db-name=<db-name>] [--db-collection=<collection-name>]
+    duplicate_finder.py cleanup [--db=<db_path>]
+    duplicate_finder.py find [--print] [--delete] [--match-time] [--trash=<trash_path>] [--db=<db_path>] [--threshold=<num>] [--db-name=<db-name>] [--db-collection=<collection-name>]
     duplicate_finder.py -h | --help
 
 Options:
@@ -32,6 +33,7 @@ import concurrent.futures
 from contextlib import contextmanager
 import os
 import magic
+#import imghdr
 import math
 from pprint import pprint
 import shutil
@@ -39,7 +41,7 @@ from subprocess import Popen, PIPE, TimeoutExpired
 from tempfile import TemporaryDirectory
 import webbrowser
 
-from flask import Flask
+from flask import Flask, Response
 from flask_cors import CORS
 import imagehash
 from jinja2 import FileSystemLoader, Environment
@@ -47,7 +49,12 @@ from more_itertools import chunked
 from PIL import Image, ExifTags
 import pymongo
 from termcolor import cprint
+import codecs
+import sys
 import pybktree
+
+scriptDir = os.path.dirname(os.path.realpath(sys.argv[0]))
+os.chdir(scriptDir)
 
 @contextmanager
 def connect_to_db(db_conn_string='./db', db_name='image_database', db_coll='images'):
@@ -58,8 +65,7 @@ def connect_to_db(db_conn_string='./db', db_name='image_database', db_coll='imag
     if 'mongodb://' == db_conn_string[:10] or 'mongodb+srv://' == db_conn_string[:14]:
         client = pymongo.MongoClient(db_conn_string)
         cprint("Connected server...", "yellow")
-        #db = client.image_database
-        #images = db.images
+
 
     # If this is not a URI
     else:
@@ -79,8 +85,7 @@ def connect_to_db(db_conn_string='./db', db_name='image_database', db_coll='imag
 
         cprint("Started database...", "yellow")
         client = pymongo.MongoClient()
-        #db = client.image_database
-        #images = db.images
+
     db = client[db_name]
     images = db[db_coll]
 
@@ -106,10 +111,12 @@ def get_image_files(path):
         full_supported_formats = ['gif', 'jp2', 'jpeg', 'pcx', 'png', 'tiff', 'x-ms-bmp',
                                   'x-portable-pixmap', 'x-xbitmap']
         try:
+            print ('trying ... ' + file_name)
             mime = magic.from_file(file_name, mime=True)
             return mime.rsplit('/', 1)[1] in full_supported_formats
         except IndexError:
             return False
+        #return imghdr.what(file_name)
 
     path = os.path.abspath(path)
     for root, dirs, files in os.walk(path):
@@ -118,25 +125,35 @@ def get_image_files(path):
             if is_image(file):
                 yield file
 
+def hash_image(img):
+    image_size = get_image_size(img)
+    capture_time = get_capture_time(img)
+
+    hashes = []
+    # hash the image 4 times and rotate it by 90 degrees each time
+    for angle in [ 0, 90, 180, 270 ]:
+        if angle > 0:
+            turned_img = img.rotate(angle, expand=True)
+        else:
+            turned_img = img
+        hashes.append(str(imagehash.phash(turned_img)))
+
+    hashes = ''.join(sorted(hashes))
+    return hashes, image_size, capture_time
 
 def hash_file(file):
     try:
-        hashes = []
-        img = Image.open(file)
+        mime = magic.from_file(file, mime=True)
+        if mime.rsplit('/', 1)[1] == 'heic':
+            heif = pyheif.read_heif(open(file, 'rb'))
+            img = Image.frombytes(
+                mode=heif.mode, size=heif.size, data=heif.data)
+        else:
+            img = Image.open(file)
 
         file_size = get_file_size(file)
-        image_size = get_image_size(img)
-        capture_time = get_capture_time(img)
 
-        # hash the image 4 times and rotate it by 90 degrees each time
-        for angle in [ 0, 90, 180, 270 ]:
-            if angle > 0:
-                turned_img = img.rotate(angle, expand=True)
-            else:
-                turned_img = img
-            hashes.append(str(imagehash.phash(turned_img)))
-
-        hashes = ''.join(sorted(hashes))
+        hashes, image_size, capture_time = hash_image(img)
 
         cprint("\tHashed {}".format(file), "blue")
         return file, hashes, file_size, image_size, capture_time
@@ -164,7 +181,7 @@ def _add_to_database(file_, hash_, file_size, image_size, capture_time, db):
 
 
 def _in_database(file, db):
-    return db.count({"_id": file}) > 0
+    return db.count_documents({"_id": file}) > 0
 
 
 def new_image_files(files, db):
@@ -205,7 +222,7 @@ def clear(db):
 
 
 def show(db):
-    total = db.count()
+    total = db.count_documents()
     pprint(list(db.find()))
     print("Total: {}".format(total))
 
@@ -237,6 +254,7 @@ def find(db, match_time=False):
         "$group": {
             "_id": "$hash",
             "total": {"$sum": 1},
+            "file_size": { "$max": "$file_size" },
             "items": {
                 "$push": {
                     "file_name": "$_id",
@@ -251,7 +269,9 @@ def find(db, match_time=False):
         "$match": {
             "total": {"$gt": 1}
         }
-    }])
+    },
+        {"$sort": {"file_size": -1 }}
+    ], allowDiskUse=True)
 
     if match_time:
         dups = (d for d in dups if same_time(d))
@@ -345,15 +365,24 @@ def display_duplicates(duplicates, db, trash="./Trash/"):
                                total=total)
 
     with TemporaryDirectory() as folder:
-        # Generate all of the HTML files
-        chunk_size = 25
-        for i, dups in enumerate(chunked(duplicates, chunk_size)):
-            with open('{}/{}.html'.format(folder, i), 'w') as f:
-                f.write(render(dups,
-                               current=i,
-                               total=math.ceil(len(duplicates) / chunk_size)))
+        if len(duplicates) == 0:
+            env = Environment(loader=FileSystemLoader('template'))
+            template = env.get_template('no_duplicates.html')
+            with open('{}/noDups.html'.format(folder), 'w') as f:
+                f.write(template.render())
 
-        webbrowser.open("file://{}/{}".format(folder, '0.html'))
+            webbrowser.open("file://{}/{}".format(folder, 'noDups.html'))
+        else:
+            # Generate all of the HTML files
+            chunk_size = 25
+            for i, dups in enumerate(chunked(duplicates, chunk_size)):
+                #with open('{}/{}.html'.format(folder, i), 'w') as f:
+                with codecs.open('{}/{}.html'.format(folder,i),'w','utf-8') as f:
+                    f.write(render(dups,
+                                current=i,
+                                total=math.ceil(len(duplicates) / chunk_size)))
+
+            webbrowser.open("file://{}/{}".format(folder, '0.html'))
 
         @app.route('/picture/<everything:file_name>', methods=['DELETE'])
         def delete_picture_(file_name, trash=trash):
@@ -397,7 +426,7 @@ if __name__ == '__main__':
     if args['--db']:
         DB_PATH = args['--db']
     else:
-        DB_PATH = "./db"
+        DB_PATH = "mongodb://localhost:27017"
     if args['--db-name']:
         DB_NAME = args['--db-name']
     else:

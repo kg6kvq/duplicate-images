@@ -1,4 +1,0 @@
-mongomock==3.9.0
-pyfakefs==3.4.1
-pytest==3.5.1
-pytest-cov==2.5.1
